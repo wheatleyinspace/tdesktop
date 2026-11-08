@@ -2597,75 +2597,72 @@ void VoiceRecordBar::startRecording() {
 	if (isRecording()) {
 		return;
 	}
-	auto appearanceCallback = [=] {
-		if (_showAnimation.animating()) {
-			return;
-		}
+	_stopping = false;
 
-		using namespace ::Media::Capture;
-		if (_recordingVideo && !createVideoRecorder()) {
-			stop(false);
-			return;
-		}
-		if (!instance()->available()) {
-			stop(false);
-			return;
-		}
+	using namespace ::Media::Capture;
+	if (_recordingVideo && !createVideoRecorder()) {
+		stop(false);
+		return;
+	}
+	if (!instance()->available()) {
+		stop(false);
+		return;
+	}
 
-		_lockShowing = true;
-		startRedCircleAnimation();
+	_lockShowing = true;
+	startRedCircleAnimation();
 
-		_recording = true;
-		if (_paused.current()) {
-			_paused = false;
-			if (_videoRecorder) {
-				instance()->pause(false, nullptr);
-				_videoRecorder->resume({
-					.video = std::move(_data),
-				});
-				clearResumePrefix();
-			} else {
-				instance()->pause(false, nullptr);
-				if (_resumeFromTrimmedListen && (_pausedRawDuration > 0)) {
-					setupResumePrefixFromCurrentData();
-					_recordingSamples = _resumePrefixSamples;
-				} else {
-					clearResumePrefix();
-				}
-				_resumeFromTrimmedListen = false;
-				update(_durationRect);
-			}
-		} else {
+	_recording = true;
+	if (_paused.current()) {
+		_paused = false;
+		if (_videoRecorder) {
+			instance()->pause(false, nullptr);
+			_videoRecorder->resume({
+				.video = std::move(_data),
+			});
 			clearResumePrefix();
-			instance()->start(_videoRecorder
-				? _videoRecorder->audioChunkProcessor()
-				: nullptr);
+		} else {
+			instance()->pause(false, nullptr);
+			if (_resumeFromTrimmedListen && (_pausedRawDuration > 0)) {
+				setupResumePrefixFromCurrentData();
+				_recordingSamples = _resumePrefixSamples;
+			} else {
+				clearResumePrefix();
+			}
+			_resumeFromTrimmedListen = false;
+			update(_durationRect);
 		}
-		instance()->updated(
+	} else {
+		clearResumePrefix();
+		instance()->start(_videoRecorder
+			? _videoRecorder->audioChunkProcessor()
+			: nullptr);
+	}
+	instance()->updated(
+	) | rpl::on_next_error([=](const Update &update) {
+		recordUpdated(update.level, update.samples);
+	}, [=] {
+		stop(false);
+	}, _recordingLifetime);
+	if (_videoRecorder) {
+		_videoRecorder->updated(
 		) | rpl::on_next_error([=](const Update &update) {
 			recordUpdated(update.level, update.samples);
-		}, [=] {
+			if (update.finished) {
+				_fullRecord = true;
+				stopRecording(StopType::Listen);
+				_lockShowing = false;
+			}
+		}, [=](Error error) {
 			stop(false);
+			_errors.fire_copy(error);
 		}, _recordingLifetime);
-		if (_videoRecorder) {
-			_videoRecorder->updated(
-			) | rpl::on_next_error([=](const Update &update) {
-				recordUpdated(update.level, update.samples);
-				if (update.finished) {
-					_fullRecord = true;
-					stopRecording(StopType::Listen);
-					_lockShowing = false;
-				}
-			}, [=](Error error) {
-				stop(false);
-				_errors.fire_copy(error);
-			}, _recordingLifetime);
-		}
-		_recordingLifetime.add([=] {
-			_recording = false;
-		});
-	};
-	visibilityAnimate(true, std::move(appearanceCallback));
+	}
+	_recordingLifetime.add([=] {
+		_recording = false;
+	});
+
+	visibilityAnimate(true);
 	show();
 
 	_inField = true;
@@ -2815,18 +2812,22 @@ void VoiceRecordBar::stop(bool send) {
 		stopRecording(StopType::Listen);
 		_lockShowing = false;
 		return;
+	} else if (std::exchange(_stopping, true)) {
+		if (!send) {
+			hide();
+		}
+		return;
 	}
 	const auto ttlBeforeHide = peekTTLState();
-	auto disappearanceCallback = [=] {
+	const auto type = send ? StopType::Send : StopType::Cancel;
+	stopRecording(type, ttlBeforeHide);
+	visibilityAnimate(false, [=] {
 		hide();
-
-		const auto type = send ? StopType::Send : StopType::Cancel;
-		stopRecording(type, ttlBeforeHide);
-	};
-	visibilityAnimate(false, std::move(disappearanceCallback));
+	});
 }
 
 void VoiceRecordBar::finish() {
+	_stopping = false;
 	_recordingLifetime.destroy();
 	_lockShowing = false;
 	_inField = false;
@@ -3130,7 +3131,7 @@ rpl::producer<> VoiceRecordBar::cancelRequests() const {
 }
 
 bool VoiceRecordBar::isRecording() const {
-	return _recording.current() && !_paused.current();
+	return _recording.current() && !_paused.current() && !_stopping;
 }
 
 bool VoiceRecordBar::isRecordingLocked() const {
@@ -3145,10 +3146,11 @@ void VoiceRecordBar::hideAnimated() {
 	if (isHidden()) {
 		return;
 	}
+	_stopping = true;
 	_lockShowing = false;
+	stopRecording(StopType::Cancel);
 	visibilityAnimate(false, [=] {
 		hideFast();
-		stopRecording(StopType::Cancel);
 	});
 }
 

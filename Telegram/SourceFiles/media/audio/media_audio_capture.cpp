@@ -23,8 +23,8 @@ namespace Capture {
 namespace {
 
 constexpr auto kCaptureFrequency = Player::kDefaultFrequency;
-constexpr auto kCaptureSkipDuration = crl::time(400);
-constexpr auto kCaptureFadeInDuration = crl::time(300);
+constexpr auto kCaptureSkipDuration = crl::time(40);
+constexpr auto kCaptureFadeInDuration = crl::time(20);
 constexpr auto kCaptureBufferSlice = 256 * 1024;
 constexpr auto kCaptureUpdateDelta = crl::time(100);
 
@@ -500,9 +500,9 @@ void Instance::Inner::stop(Fn<void(Result&&)> callback) {
 
 	// Write what is left
 	if (needResult && !_captured.isEmpty()) {
-		auto fadeSamples = kCaptureFadeInDuration * kCaptureFrequency / 1000;
+		auto fadeSamples = static_cast<int>(kCaptureFadeInDuration * kCaptureFrequency / 1000);
 		auto capturedSamples = static_cast<int>(_captured.size() / sizeof(short));
-		if ((_captured.size() % sizeof(short)) || (d->fullSamples + capturedSamples < kCaptureFrequency) || (capturedSamples < fadeSamples)) {
+		if ((_captured.size() % sizeof(short)) || (d->fullSamples + capturedSamples < kCaptureFrequency) || !capturedSamples) {
 			d->fullSamples = 0;
 			d->dataPos = 0;
 			d->data.clear();
@@ -510,10 +510,13 @@ void Instance::Inner::stop(Fn<void(Result&&)> callback) {
 			d->waveformPeak = 0;
 			d->waveform.clear();
 		} else {
-			float64 coef = 1. / fadeSamples, fadedFrom = 0;
-			for (short *ptr = ((short*)_captured.data()) + capturedSamples, *end = ptr - fadeSamples; ptr != end; ++fadedFrom) {
-				--ptr;
-				*ptr = int(base::SafeRound(fadedFrom * coef * *ptr));
+			const auto fadeCount = std::min(capturedSamples, fadeSamples);
+			if (fadeCount > 0) {
+				float64 coef = 1. / fadeCount, fadedFrom = 0;
+				for (short *ptr = ((short*)_captured.data()) + capturedSamples, *end = ptr - fadeCount; ptr != end; ++fadedFrom) {
+					--ptr;
+					*ptr = int(base::SafeRound(fadedFrom * coef * *ptr));
+				}
 			}
 			if (capturedSamples % d->srcSamples) {
 				int32 s = _captured.size();
@@ -664,9 +667,9 @@ void Instance::Inner::process() {
 		auto fadeSamples = kCaptureFadeInDuration * kCaptureFrequency / 1000;
 		auto levelindex = d->fullSamples + static_cast<int>(s / sizeof(short));
 		for (auto ptr = (const short*)(_captured.constData() + s), end = (const short*)(_captured.constData() + news); ptr < end; ++ptr, ++levelindex) {
-			if (levelindex > skipSamples) {
+			if (levelindex >= skipSamples) {
 				uint16 value = std::abs(int(*ptr));
-				if (levelindex < skipSamples + fadeSamples) {
+				if (fadeSamples > 0 && levelindex < skipSamples + fadeSamples) {
 					const auto faded = value
 						* float64(levelindex - skipSamples)
 						/ fadeSamples;
@@ -722,7 +725,7 @@ bool Instance::Inner::processFrame(int32 offset, int32 framesize) {
 	//	memcpy(d->srcSamplesData[0], _captured.constData() + offset, framesize);
 	auto skipSamples = static_cast<int>(kCaptureSkipDuration * kCaptureFrequency / 1000);
 	auto fadeSamples = static_cast<int>(kCaptureFadeInDuration * kCaptureFrequency / 1000);
-	if (d->fullSamples < skipSamples + fadeSamples) {
+	if (fadeSamples > 0 && d->fullSamples < skipSamples + fadeSamples) {
 		int32 fadedCnt = std::min(
 			samplesCnt,
 			skipSamples + fadeSamples - d->fullSamples);

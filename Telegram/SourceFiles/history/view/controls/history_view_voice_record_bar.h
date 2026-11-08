@@ -138,7 +138,7 @@ private:
 
 	void stop(bool send);
 	void stopRecording(StopType type, bool ttlBeforeHide = false);
-	void visibilityAnimate(bool show, Fn<void()> &&callback);
+	void visibilityAnimate(bool show, Fn<void()> &&callback = nullptr);
 
 	void drawDuration(QPainter &p);
 	void drawRedCircle(QPainter &p);
@@ -217,6 +217,7 @@ private:
 	bool _pauseInsteadSend = false;
 
 	rpl::variable<bool> _recording = false;
+	bool _stopping = false;
 	rpl::variable<bool> _inField = false;
 	rpl::variable<bool> _lockShowing = false;
 	int _recordingSamples = 0;
